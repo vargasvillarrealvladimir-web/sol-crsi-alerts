@@ -1,0 +1,38 @@
+name: cRSI Telegram
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"
+  workflow_dispatch:
+
+jobs:
+  detector:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Instalar dependencias
+        run: pip install requests pandas numpy
+
+      - name: Ejecutar detector
+        env:
+          TELEGRAM_TOKEN: ${{8937571108:AAFDGsO_yxXRyC3lcnLGXhHyOpLZPOWgDE0}}
+          TELEGRAM_CHAT_ID: ${{1572505807}}
+        run: python detector.py
+
+      - name: Guardar última señal
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add last_signal.txt
+          git diff --cached --quiet || git commit -m "Actualizar última señal"
+          git push
