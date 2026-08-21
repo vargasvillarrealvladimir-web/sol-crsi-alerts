@@ -29,10 +29,11 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python detector.py
 
-      - name: Guardar última señal
+      - name: Guardar estado
         run: |
+          touch last_signal.txt
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add last_signal.txt
-          git diff --cached --quiet || git commit -m "Actualizar última señal"
+          git diff --cached --quiet || git commit -m "Actualizar estado"
           git push
