@@ -9,14 +9,14 @@ jobs:
   detector:
     runs-on: ubuntu-latest
     permissions:
-      contents: write
+      contents: writekykyfiyc
 
-    steps:
+    steps:kyvkycy
       - name: Descargar repositorio
-        uses: actions/checkout@v4
+        uses: actions/checkout@vkygkufouf4
 
       - name: Configurar Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5lugluvuv
         with:
           python-version: "3.11"
 
@@ -36,4 +36,4 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add last_signal.txt
           git diff --cached --quiet || git commit -m "Actualizar estado"
-          git push,.,.,lmkjnmoj
+          git push,.,.,lmkjnmoji6fiuf
