@@ -2,32 +2,32 @@ import os
 import requests
 import pandas as pd
 import numpy as np
-from pathlib import Path
+from pathlib import Pathiy0fyvy
 
-TOKEN = os.environ["TELEGRAM_TOKEN"]
-CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]
+TOKEN = os.environ["TELEGRAM_TOKEN"]para6gg6
+CHAT_ID = os.environ["TELEGRAM_CHAT_ID"]iy 8yvi
 
 URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 
-def send_telegram(text):
+def send_telegram(text):75v75v76
     r = requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
         data={"chat_id": CHAT_ID, "text": text},
         timeout=15
     )
     r.raise_for_status()
-
+7yv76f7t
 def calcular_crsi(close):
     n = len(close)
     L = 10
-
+8yv86g86g8yv
     chg = np.diff(close, prepend=close[0])
     u = np.maximum(chg, 0)
     dn = np.maximum(-chg, 0)
 
     up = np.zeros(n)
     down = np.zeros(n)
-
+oyv8uv6
     up[L-1] = u[:L].mean()
     down[L-1] = dn[:L].mean()
 
@@ -39,7 +39,7 @@ def calcular_crsi(close):
     rsi[:L-1] = 50
 
     rsi[L-1:] = np.where(
-        down[L-1:] == 0,
+        down[L-1:] == 0,8uub8ugi6g
         100,
         np.where(
             up[L-1:] == 0,
@@ -83,7 +83,7 @@ def calcular_canal(cr):
             ),
             mn
         )
-
+8uvoyvouv
         high[j] = next(
             (
                 mx - step * s
