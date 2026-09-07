@@ -1,39 +1,620 @@
-name: cRSI Telegram
+import time
+import requests
+import pandas as pd
+import numpy as np
+from pathlib import Path
+from datetime import datetime
 
-on:
-  schedule:
-    - cron: "*/15 * * * *"
-  workflow_dispatch:
+# ==========================================
+# CONFIGURACION
+# ==========================================
 
-jobs:
-  detector:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: writekykyfiyc
+TOKEN = "8937571108:AAFDGsO_yxXRyC3lcnLGXhHyOpLZPOWgDE0"
+CHAT_ID = "1572505807"
 
-    steps:kyvkycy
-      - name: Descargar repositorio
-        uses: actions/checkout@vkygkufouf4
+URL = "https://open-api.bingx.com/openApi/swap/v3/quote/klines"
 
-      - name: Configurar Python
-        uses: actions/setup-python@v5lugluvuv
-        with:
-          python-version: "3.11"
+SYMBOL = "SOL-USDT"
+INTERVAL = "15m"
 
-      - name: Instalar dependencias
-        run: pip install requests pandas numpy
+# Revisar BingX cada 5 segundos
+CHECK_SECONDS = 5
 
-      - name: Ejecutar detector
-        env:
-          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
-          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-        run: python detector.py
+# Archivo para recordar la ultima señal enviada
+STATE_FILE = Path("last_signal.txt")
 
-      - name: Guardar estado
-        run: |
-          touch last_signal.txt
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add last_signal.txt
-          git diff --cached --quiet || git commit -m "Actualizar estado"
-          git push,.,.,lmkjnmoji6fiuf
+# Archivo para recordar la ultima vela procesada
+CANDLE_FILE = Path("last_candle.txt")
+
+
+# ==========================================
+# TELEGRAM
+# ==========================================
+
+def send_telegram(text):
+
+    try:
+
+        r = requests.post(
+            f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+            data={
+                "chat_id": CHAT_ID,
+                "text": text
+            },
+            timeout=15
+        )
+
+        r.raise_for_status()
+
+        print("✅ Mensaje enviado exitosamente a Telegram.")
+
+        return True
+
+    except Exception as e:
+
+        print(f"❌ Error al enviar mensaje a Telegram: {e}")
+
+        return False
+
+
+# ==========================================
+# CALCULAR cRSI
+# ==========================================
+
+def calcular_crsi(close):
+
+    n = len(close)
+
+    L = 10
+
+    chg = np.diff(
+        close,
+        prepend=close[0]
+    )
+
+    u = np.maximum(
+        chg,
+        0
+    )
+
+    dn = np.maximum(
+        -chg,
+        0
+    )
+
+    up = np.zeros(n)
+
+    down = np.zeros(n)
+
+    up[L - 1] = u[:L].mean()
+
+    down[L - 1] = dn[:L].mean()
+
+    for i in range(L, n):
+
+        up[i] = (
+            up[i - 1] * 9 + u[i]
+        ) / L
+
+        down[i] = (
+            down[i - 1] * 9 + dn[i]
+        ) / L
+
+    rsi = np.zeros(n)
+
+    rsi[:L - 1] = 50
+
+    rsi[L - 1:] = np.where(
+        down[L - 1:] == 0,
+        100,
+        np.where(
+            up[L - 1:] == 0,
+            0,
+            100 - 100 / (
+                1 +
+                up[L - 1:] /
+                down[L - 1:]
+            )
+        )
+    )
+
+    cr = np.zeros(n)
+
+    cr[0] = rsi[0]
+
+    torque = 2 / 11
+
+    for i in range(1, n):
+
+        cr[i] = (
+            torque *
+            (
+                2 * rsi[i] -
+                rsi[i - 4]
+            )
+            +
+            (1 - torque) *
+            cr[i - 1]
+        )
+
+    return cr
+
+
+# ==========================================
+# CALCULAR BANDAS
+# ==========================================
+
+def calcular_canal(cr):
+
+    n = len(cr)
+
+    mem = 40
+
+    low = np.full(
+        n,
+        np.nan
+    )
+
+    high = np.full(
+        n,
+        np.nan
+    )
+
+    for j in range(
+        mem - 1,
+        n
+    ):
+
+        x = cr[
+            j - mem + 1:
+            j + 1
+        ]
+
+        mn = x.min()
+
+        mx = x.max()
+
+        step = (
+            mx - mn
+        ) / 100
+
+        low[j] = next(
+            (
+                mn + step * s
+                for s in range(101)
+                if np.mean(
+                    x <
+                    mn + step * s
+                ) >= 0.10
+            ),
+            mn
+        )
+
+        high[j] = next(
+            (
+                mx - step * s
+                for s in range(101)
+                if np.mean(
+                    x >=
+                    mx - step * s
+                ) >= 0.10
+            ),
+            mx
+        )
+
+    return low, high
+
+
+# ==========================================
+# OBTENER DATOS DE BINGX
+# ==========================================
+
+def obtener_datos():
+
+    try:
+
+        response = requests.get(
+            URL,
+            params={
+                "symbol": SYMBOL,
+                "interval": INTERVAL,
+                "limit": 1000
+            },
+            timeout=15
+        )
+
+        response.raise_for_status()
+
+        result = response.json()
+
+        data = result.get(
+            "data"
+        )
+
+        if not data:
+
+            print(
+                "⚠️ BingX no devolvió datos."
+            )
+
+            return None
+
+        df = pd.DataFrame(data)
+
+        # ----------------------------------
+        # HORA BINGX UTC -> BOLIVIA UTC-4
+        # ----------------------------------
+
+        df["time"] = (
+            pd.to_datetime(
+                df["time"],
+                unit="ms",
+                utc=True
+            )
+            -
+            pd.Timedelta(
+                hours=4
+            )
+        )
+
+        # ----------------------------------
+        # ORDEN CRONOLOGICO
+        # ----------------------------------
+
+        df = (
+            df
+            .sort_values(
+                "time"
+            )
+            .reset_index(
+                drop=True
+            )
+        )
+
+        # ----------------------------------
+        # ELIMINAR VELA ACTUAL INCOMPLETA
+        # ----------------------------------
+
+        if len(df) > 1:
+
+            df = df.iloc[:-1].copy()
+
+        return df
+
+    except Exception as e:
+
+        print(
+            f"❌ Error obteniendo datos BingX: {e}"
+        )
+
+        return None
+
+
+# ==========================================
+# VERIFICAR MERCADO
+# ==========================================
+
+def verificar_mercado():
+
+    df = obtener_datos()
+
+    if df is None:
+
+        return
+
+    # ----------------------------------
+    # COMPROBAR DATOS SUFICIENTES
+    # ----------------------------------
+
+    if len(df) < 100:
+
+        print(
+            "⚠️ No hay suficientes velas."
+        )
+
+        return
+
+    # ----------------------------------
+    # CLOSE
+    # ----------------------------------
+
+    close = (
+        df["close"]
+        .astype(float)
+        .to_numpy()
+    )
+
+    # ----------------------------------
+    # cRSI
+    # ----------------------------------
+
+    cr = calcular_crsi(
+        close
+    )
+
+    # ----------------------------------
+    # BANDAS
+    # ----------------------------------
+
+    low, high = calcular_canal(
+        cr
+    )
+
+    # ----------------------------------
+    # ULTIMA VELA CERRADA
+    # ----------------------------------
+
+    i = len(df) - 1
+
+    if i < 40:
+
+        return
+
+    # ----------------------------------
+    # HORA DE LA VELA
+    # ----------------------------------
+
+    candle_time = df.iloc[i]["time"]
+
+    candle_time_text = candle_time.strftime(
+        "%Y-%m-%d %H:%M:%S"
+    )
+
+    # ----------------------------------
+    # ID DE LA VELA
+    # ----------------------------------
+
+    candle_id = candle_time.isoformat()
+
+    # ----------------------------------
+    # COMPROBAR SI YA PROCESAMOS ESTA VELA
+    # ----------------------------------
+
+    previous_candle = ""
+
+    if CANDLE_FILE.exists():
+
+        previous_candle = (
+            CANDLE_FILE
+            .read_text()
+            .strip()
+        )
+
+    # Si ya procesamos esta vela,
+    # no hacemos nada
+    if candle_id == previous_candle:
+
+        return
+
+    # ----------------------------------
+    # MARCAR VELA COMO PROCESADA
+    # ----------------------------------
+
+    CANDLE_FILE.write_text(
+        candle_id
+    )
+
+    # ----------------------------------
+    # DETECTAR LONG / SHORT
+    # ----------------------------------
+
+    signal = None
+
+    # LONG:
+    # cRSI estaba por debajo/en la banda
+    # y cruza hacia arriba
+
+    if (
+        cr[i - 1] <= low[i - 1]
+        and
+        cr[i] > low[i]
+    ):
+
+        signal = "LONG"
+
+    # SHORT:
+    # cRSI estaba por encima/en la banda
+    # y cruza hacia abajo
+
+    elif (
+        cr[i - 1] >= high[i - 1]
+        and
+        cr[i] < high[i]
+    ):
+
+        signal = "SHORT"
+
+    # ----------------------------------
+    # SI NO HAY SEÑAL
+    # ----------------------------------
+
+    if signal is None:
+
+        print(
+            f"⏱️ {candle_time_text} | "
+            f"Sin señal | "
+            f"cRSI: {cr[i]:.2f}"
+        )
+
+        return
+
+    # ----------------------------------
+    # PRECIO
+    # ----------------------------------
+
+    price = close[i]
+
+    # ----------------------------------
+    # ID UNICO DE LA SEÑAL
+    # ----------------------------------
+
+    signal_id = (
+        f"{signal}|{candle_id}"
+    )
+
+    # ----------------------------------
+    # COMPROBAR DUPLICADOS
+    # ----------------------------------
+
+    previous_signal = ""
+
+    if STATE_FILE.exists():
+
+        previous_signal = (
+            STATE_FILE
+            .read_text()
+            .strip()
+        )
+
+    if signal_id == previous_signal:
+
+        print(
+            "⚠️ Esta señal ya fue enviada."
+        )
+
+        return
+
+    # ==================================
+    # MENSAJE LONG
+    # ==================================
+
+    if signal == "LONG":
+
+        message = (
+            "🟢 LONG cRSI (Confirmada)\n"
+            "SOL-USDT 15m\n"
+            f"🇧🇴 Vela: {candle_time_text}\n"
+            f"Precio: {price:.3f}\n"
+            f"cRSI: {cr[i]:.2f}\n"
+            f"LowBand: {low[i]:.2f}\n"
+            "\n"
+            "✅ Vela cerrada y señal confirmada."
+        )
+
+    # ==================================
+    # MENSAJE SHORT
+    # ==================================
+
+    else:
+
+        message = (
+            "🔴 SHORT cRSI (Confirmada)\n"
+            "SOL-USDT 15m\n"
+            f"🇧🇴 Vela: {candle_time_text}\n"
+            f"Precio: {price:.3f}\n"
+            f"cRSI: {cr[i]:.2f}\n"
+            f"HighBand: {high[i]:.2f}\n"
+            "\n"
+            "✅ Vela cerrada y señal confirmada."
+        )
+
+    # ==================================
+    # ENVIAR TELEGRAM
+    # ==================================
+
+    enviado = send_telegram(
+        message
+    )
+
+    # ----------------------------------
+    # GUARDAR SOLO SI TELEGRAM CONFIRMO
+    # ----------------------------------
+
+    if enviado:
+
+        STATE_FILE.write_text(
+            signal_id
+        )
+
+        print("")
+        print(
+            "=========================================="
+        )
+
+        print(
+            f"🚨 SEÑAL {signal} ENVIADA"
+        )
+
+        print(
+            f"🇧🇴 Vela: {candle_time_text}"
+        )
+
+        print(
+            f"Precio: {price:.3f}"
+        )
+
+        print(
+            f"cRSI: {cr[i]:.2f}"
+        )
+
+        print(
+            "=========================================="
+        )
+
+        print("")
+
+
+# ==========================================
+# PROGRAMA PRINCIPAL
+# ==========================================
+
+def main():
+
+    print(
+        "=========================================="
+    )
+
+    print(
+        "   BOT cRSI SOL-USDT 15m"
+    )
+
+    print(
+        "   MONITOREO EN TIEMPO REAL"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    print(
+        "Consultando BingX cada 5 segundos..."
+    )
+
+    print(
+        "Solo se utilizan velas cerradas."
+    )
+
+    print(
+        "Zona horaria: Bolivia UTC-4"
+    )
+
+    print(
+        "=========================================="
+    )
+
+    print("")
+
+    while True:
+
+        try:
+
+            verificar_mercado()
+
+        except Exception as e:
+
+            print(
+                f"❌ Error general: {e}"
+            )
+
+        time.sleep(
+            CHECK_SECONDS
+        )
+
+
+# ==========================================
+# INICIAR BOT
+# ==========================================
+
+if __name__ == "__main__":
+
+    main()
